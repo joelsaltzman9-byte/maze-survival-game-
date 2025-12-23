@@ -1,0 +1,1743 @@
+<!DOCTYPE html>
+
+<html lang="en">
+
+<head>
+
+    <meta charset="UTF-8">
+
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>Maze Survival</title>
+
+    <style>
+
+        body { margin: 0; overflow: hidden; background: #111; }
+
+    </style>
+
+</head>
+
+<body>
+
+    <div id="game-container"></div>
+
+
+<script>
+
+(function(){
+
+    // --- CONFIGURATION & STATE ---
+
+    const CELL = 25;
+
+    const canvas = document.createElement('canvas');
+
+    Object.assign(canvas.style, {position:'fixed',left:0,top:0,zIndex:99999, background:'#111'});
+
+    document.getElementById('game-container').appendChild(canvas);
+
+    const ctx = canvas.getContext('2d');
+
+
+    let cols, rows;
+
+    // Moved up to ensure accessibility by all functions
+
+    let currentSelection = 0; 
+
+
+    function resize() {
+
+        canvas.width = window.innerWidth;
+
+        canvas.height = window.innerHeight;
+
+        cols = Math.floor(canvas.width / CELL);
+
+        rows = Math.floor(canvas.height / CELL);
+
+        if (cols % 2 === 0) cols--;
+
+        if (rows % 2 === 0) rows--;
+
+        cols = Math.max(7, cols);
+
+        rows = Math.max(7, rows);
+
+    }
+
+
+    const gameState = {
+
+        playing: false,
+
+        levelIndex: 0,
+
+        enemiesToSpawn: 0,
+
+        mazeBossesDefeated: 0,
+
+        enemiesDefeated: 0,
+
+        startTime: 0,
+
+        paused: false,
+
+        shouldPushBack: false,
+
+        playerMoveCount: 0,
+
+        trapsActive: false,
+
+        enemiesSpawnThreshold: 50,
+
+        mazeBossTeleportThreshold: 10, 
+
+        menuState: 'none',
+
+        sfxOn: true,
+
+        difficulty: 'normal',
+
+    };
+
+
+    let mazeGrid = [];
+
+    let player = {x:1,y:1, shield:false, ammo:0};
+
+    let exitCell = {x:0,y:0};
+
+    let spikes = [];
+
+    let lava = [];
+
+    let purpleOrbs = [];
+
+    let blueShields = [];
+
+    let enemies = [];
+
+    let bullets = [];
+
+    let mazeBosses = [];
+
+    let fireballs = [];
+
+
+    // -------------------- AUDIO SETUP --------------------
+
+    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+
+    
+
+    function playSound(frequency, duration, volume, type = 'square') {
+
+        if (!audioContext || !gameState.sfxOn) return;
+
+        const osc = audioContext.createOscillator();
+
+        const gain = audioContext.createGain();
+
+
+        osc.type = type;
+
+        osc.frequency.setValueAtTime(frequency, audioContext.currentTime);
+
+        
+
+        gain.gain.setValueAtTime(volume, audioContext.currentTime);
+
+        gain.gain.exponentialRampToValueAtTime(0.00001, audioContext.currentTime + duration);
+
+
+        osc.connect(gain);
+
+        gain.connect(audioContext.destination);
+
+
+        osc.start();
+
+        osc.stop(audioContext.currentTime + duration);
+
+    }
+
+
+    const SFX = {
+
+        playerMove: () => playSound(440, 0.05, 0.1, 'sine'),
+
+        shoot: () => playSound(880, 0.08, 0.2, 'square'),
+
+        enemyHit: () => playSound(100, 0.1, 0.3, 'sawtooth'),
+
+        itemPickup: () => playSound(1500, 0.1, 0.3, 'triangle'),
+
+        playerHit: () => { playSound(60, 0.5, 0.5, 'square'); playSound(30, 0.5, 0.4, 'sawtooth'); },
+
+        trapToggle: (on) => playSound(on ? 200 : 150, 0.05, 0.15, 'sine'),
+
+        mazeBossFire: () => playSound(200, 0.15, 0.4, 'sawtooth'),
+
+        levelComplete: () => { playSound(1000, 0.1, 0.3); playSound(1500, 0.1, 0.3); },
+
+        gameOver: () => { playSound(50, 1.0, 0.5, 'square'); playSound(25, 1.0, 0.4, 'sawtooth'); },
+
+        menuClick: () => playSound(800, 0.05, 0.1, 'sine'),
+
+    };
+
+
+    function toggleSFX() {
+
+        gameState.sfxOn = !gameState.sfxOn;
+
+        SFX.menuClick();
+
+    }
+
+
+    // -------------------- GAME LOGIC --------------------
+
+
+    function updateSpawnThreshold() {
+
+        if (gameState.difficulty === 'easy') {
+
+            gameState.enemiesSpawnThreshold = 100;
+
+            gameState.mazeBossTeleportThreshold = 15;
+
+        } else if (gameState.difficulty === 'normal') {
+
+            gameState.enemiesSpawnThreshold = 50;
+
+            gameState.mazeBossTeleportThreshold = 10;
+
+        } else if (gameState.difficulty === 'hard') {
+
+            gameState.enemiesSpawnThreshold = 25;
+
+            gameState.mazeBossTeleportThreshold = 5;
+
+        }
+
+    }
+
+
+    function setDifficulty(newDiff) {
+
+        gameState.difficulty = newDiff;
+
+        updateSpawnThreshold();
+
+    }
+
+
+    updateSpawnThreshold();
+
+
+    function rndInt(a,b){ return Math.floor(Math.random()*(b-a+1))+a; }
+
+    function inBounds(x,y){ return x>=0 && y>=0 && x<cols && y<rows; }
+
+
+    function generateMazeGrid() {
+
+        mazeGrid = Array.from({length:rows},()=>Array(cols).fill(1));
+
+        function carve(cx,cy){
+
+            mazeGrid[cy][cx] = 0;
+
+            const dirs = [[2,0],[-2,0],[0,2],[0,-2]].sort(()=>Math.random()-0.5);
+
+            for (const [dx,dy] of dirs){
+
+                const nx = cx+dx, ny = cy+dy;
+
+                if (inBounds(nx,ny) && mazeGrid[ny][nx]===1){
+
+                    mazeGrid[cy+dy/2][cx+dx/2]=0;
+
+                    carve(nx,ny);
+
+                }
+
+            }
+
+        }
+
+        carve(1,1);
+
+        for (let y = 2; y < rows - 2; y++) {
+
+            for (let x = 2; x < cols - 2; x++) {
+
+                if (mazeGrid[y][x] === 1) {
+
+                    const openVertical = mazeGrid[y-1][x] === 0 && mazeGrid[y+1][x] === 0;
+
+                    const openHorizontal = mazeGrid[y][x-1] === 0 && mazeGrid[y][x+1] === 0;
+
+                    if ((openVertical || openHorizontal) && Math.random() < 0.08) {
+
+                        mazeGrid[y][x] = 0;
+
+                    }
+
+                }
+
+            }
+
+        }
+
+        return mazeGrid;
+
+    }
+
+
+    function bfsPath(sx,sy,tx,ty) {
+
+        const q = [[sx,sy]];
+
+        const prev = {};
+
+        const key = (x,y)=>x+','+y;
+
+        prev[key(sx,sy)] = null;
+
+        while(q.length){
+
+            const [x,y] = q.shift();
+
+            if (x===tx && y===ty) {
+
+                const path = [];
+
+                let cur = key(x,y);
+
+                while(cur!==null){
+
+                    const [px,py] = cur.split(',').map(Number);
+
+                    path.unshift([px,py]);
+
+                    cur = prev[cur];
+
+                }
+
+                return path;
+
+            }
+
+            for (const [nx,ny] of [[x+1,y],[x-1,y],[x,y+1],[x,y-1]]){
+
+                if (!inBounds(nx,ny)) continue;
+
+                if (mazeGrid[ny][nx]===1) continue;
+
+                const k = key(nx,ny);
+
+                if (prev[k]!==undefined) continue;
+
+                prev[k] = key(x,y);
+
+                q.push([nx,ny]);
+
+            }
+
+        }
+
+        return null;
+
+    }
+
+
+    function getSmartPathDirection(sx, sy, tx, ty) {
+
+        if (Math.abs(sx-tx) + Math.abs(sy-ty) === 1) return {x:tx, y:ty};
+
+        const q = [[sx, sy]];
+
+        const visited = new Set();
+
+        const cameFrom = {};
+
+        const key = (x,y) => x+","+y;
+
+        visited.add(key(sx, sy));
+
+        cameFrom[key(sx, sy)] = null;
+
+        let found = false;
+
+        while(q.length > 0) {
+
+            const [cx, cy] = q.shift();
+
+            if (cx === tx && cy === ty) { found = true; break; }
+
+            const neighbors = [[cx+1,cy], [cx-1,cy], [cx,cy+1], [cx,cy-1]];
+
+            for(let [nx, ny] of neighbors) {
+
+                if(inBounds(nx, ny) && mazeGrid[ny][nx] === 0 && !visited.has(key(nx, ny))) {
+
+                    visited.add(key(nx, ny));
+
+                    cameFrom[key(nx, ny)] = {x:cx, y:cy};
+
+                    q.push([nx, ny]);
+
+                }
+
+            }
+
+        }
+
+        if (!found) return null;
+
+        let curr = {x:tx, y:ty};
+
+        while(true) {
+
+            const parent = cameFrom[key(curr.x, curr.y)];
+
+            if (!parent) return null;
+
+            if (parent.x === sx && parent.y === sy) return curr;
+
+            curr = parent;
+
+        }
+
+    }
+
+
+    function placeTrapsAndItems(levelIndex, enemyCount, isBossRoom=false) {
+
+        spikes=[]; lava=[]; purpleOrbs=[]; blueShields=[]; enemies=[]; mazeBosses=[]; bullets=[]; fireballs=[];
+
+        player.x = 1; player.y = 1;
+
+        exitCell.x = cols-2; exitCell.y = rows-2;
+
+        gameState.playerMoveCount = 0;
+
+        gameState.trapsActive = false;
+
+
+        if (mazeGrid[exitCell.y][exitCell.x]===1){
+
+            mazeGrid[exitCell.y][exitCell.x]=0;
+
+            if (exitCell.x>1) mazeGrid[exitCell.y][exitCell.x-1]=0;
+
+            if (exitCell.y>1) mazeGrid[exitCell.y-1][exitCell.x]=0;
+
+        }
+
+
+        const safePath = bfsPath(player.x,player.y,exitCell.x,exitCell.y);
+
+        if (!safePath){ generateLevel(levelIndex); return; }
+
+
+        const MAX_TRAPS_BASE = 6;
+
+        const MIN_TRAPS_BASE = 3;
+
+        const maxTraps = Math.max(0, MAX_TRAPS_BASE - Math.floor(levelIndex / 2));
+
+        const minTraps = Math.max(0, MIN_TRAPS_BASE - Math.floor(levelIndex / 3));
+
+        const finalMaxTraps = Math.max(minTraps, maxTraps);
+
+        const finalMinTraps = Math.min(minTraps, finalMaxTraps);
+
+        const trapRange = [finalMinTraps, finalMaxTraps];
+
+        const spikeCount = rndInt(trapRange[0], trapRange[1]);
+
+        const lavaCount = rndInt(trapRange[0], trapRange[1]);
+
+
+        const safeSet = new Set(safePath.map(p=>p[0]+','+p[1]));
+
+        const candidates = [];
+
+        for (let y=1;y<rows-1;y++) for (let x=1;x<cols-1;x++){
+
+            if (mazeGrid[y][x]===0 && !safeSet.has(x+','+y) && !(x===player.x && y===player.y) && !(x===exitCell.x && y===exitCell.y)){
+
+                candidates.push([x,y]);
+
+            }
+
+        }
+
+        for (let i=candidates.length-1;i>0;i--){ const j=rndInt(0,i); [candidates[i],candidates[j]]=[candidates[j],candidates[i]]; }
+
+
+        let idx=0;
+
+        for (let i=0;i<spikeCount && idx<candidates.length;i++,idx++) spikes.push({x:candidates[idx][0],y:candidates[idx][1]});
+
+        for (let i=0;i<lavaCount && idx<candidates.length;i++,idx++) lava.push({x:candidates[idx][0],y:candidates[idx][1]});
+
+
+        const orbCandidates = [];
+
+        for (let y=1;y<rows-1;y++) for (let x=1;x<cols-1;x++){
+
+            if (mazeGrid[y][x]===0 && !(x===player.x && y===player.y) && !(x===exitCell.x && y===exitCell.y)){
+
+                if (spikes.find(s=>s.x===x && s.y===y) || lava.find(s=>s.x===x && s.y===y)) continue;
+
+                orbCandidates.push([x,y]);
+
+            }
+
+        }
+
+        for (let i=0;i<enemyCount && orbCandidates.length>0;i++){
+
+            const j = rndInt(0, orbCandidates.length-1);
+
+            const [x,y] = orbCandidates.splice(j,1)[0];
+
+            purpleOrbs.push({x,y});
+
+        }
+
+        if (Math.random() < 0.25 && orbCandidates.length>0){
+
+            const j = rndInt(0, orbCandidates.length-1);
+
+            const [x,y] = orbCandidates.splice(j,1)[0];
+
+            blueShields.push({x,y});
+
+        }
+
+
+        if (isBossRoom){
+
+            const bossesCount = Math.max(1, Math.floor(levelIndex/5));
+
+            mazeBosses = [];
+
+            const bossCells = [];
+
+            for (let y=1;y<rows-1;y++) for (let x=1;x<cols-1;x++){
+
+                if (!(x===player.x && y===player.y) && !(x===exitCell.x && y===exitCell.y)) bossCells.push([x,y]);
+
+            }
+
+            for (let d=0; d<bossesCount && bossCells.length>0; d++){
+
+                const j = rndInt(0, bossCells.length-1);
+
+                const [x,y] = bossCells.splice(j,1)[0];
+
+                mazeBosses.push({x,y,cooldown: 30 + d*10, hp:3});
+
+            }
+
+        }
+
+
+        enemies = [];
+
+        const enemyCells = candidates.concat();
+
+        if (enemyCells.length < enemyCount){
+
+            for (const p of safePath){
+
+                if (!(p[0]===player.x && p[1]===player.y) && !(p[0]===exitCell.x && p[1]===exitCell.y)) enemyCells.push(p);
+
+            }
+
+        }
+
+        for (let e=0;e<enemyCount && enemyCells.length>0;e++){
+
+            const j = rndInt(0, enemyCells.length-1);
+
+            const [x,y] = enemyCells.splice(j,1)[0];
+
+            enemies.push({x,y,alive:true});
+
+        }
+
+    }
+
+
+    function spawnNewEnemy() {
+
+        const spawnCandidates = [];
+
+        for (let y=1; y<rows-1; y++) {
+
+            for (let x=1; x<cols-1; x++) {
+
+                if (mazeGrid[y][x]===0 &&
+
+                    !(x===player.x && y===player.y) &&
+
+                    !(x===exitCell.x && y===exitCell.y) &&
+
+                    !enemies.some(e => e.alive && e.x === x && e.y === y) &&
+
+                    !mazeBosses.some(d => d.x === x && d.y === y))
+
+                {
+
+                    spawnCandidates.push({x, y});
+
+                }
+
+            }
+
+        }
+
+        if (spawnCandidates.length > 0) {
+
+            const index = rndInt(0, spawnCandidates.length - 1);
+
+            const {x, y} = spawnCandidates[index];
+
+            enemies.push({x, y, alive: true});
+
+        }
+
+    }
+
+
+    function stepEnemies() {
+
+        for (const en of enemies){
+
+            if (!en.alive) continue;
+
+            const nextStep = getSmartPathDirection(en.x, en.y, player.x, player.y);
+
+            let moved = false;
+
+            if (nextStep) {
+
+                const occupied = enemies.some(e2 => e2 !== en && e2.alive && e2.x === nextStep.x && e2.y === nextStep.y);
+
+                if (!occupied) {
+
+                    en.x = nextStep.x;
+
+                    en.y = nextStep.y;
+
+                    moved = true;
+
+                }
+
+            }
+
+            if (moved && gameState.trapsActive && (spikes.find(s=>s.x===en.x && s.y===en.y) || lava.find(s=>s.x===en.x && s.y===en.y))){
+
+                en.alive = false;
+
+                gameState.enemiesDefeated++;
+
+                SFX.enemyHit();
+
+            }
+
+            if (en.alive && en.x===player.x && en.y===player.y) {
+
+                handlePlayerHit(true);
+
+                if (!gameState.playing) return;
+
+            }
+
+        }
+
+
+        if (gameState.shouldPushBack) {
+
+            gameState.shouldPushBack = false;
+
+            for (const en of enemies) {
+
+                if (!en.alive || en.x !== player.x || en.y !== player.y) continue;
+
+                const potentialMoves = [
+
+                    [2, 0], [-2, 0], [0, 2], [0, -2]
+
+                ].sort(() => Math.random() - 0.5);
+
+                let pushed = false;
+
+                for (const [pdx, pdy] of potentialMoves) {
+
+                    const nx = en.x + pdx;
+
+                    const ny = en.y + pdy;
+
+                    if (inBounds(nx, ny) && mazeGrid[ny][nx] === 0) {
+
+                        const midX = en.x + Math.sign(pdx);
+
+                        const midY = en.y + Math.sign(pdy);
+
+                        if (mazeGrid[midY][midX] === 0) {
+
+                            en.x = nx;
+
+                            en.y = ny;
+
+                            pushed = true;
+
+                            break;
+
+                        }
+
+                    }
+
+                }
+
+                if (pushed && gameState.trapsActive && (spikes.find(s=>s.x===en.x && s.y===en.y) || lava.find(s=>s.x===en.x && s.y===en.y))){
+
+                    en.alive = false;
+
+                    gameState.enemiesDefeated++;
+
+                    SFX.enemyHit();
+
+                }
+
+            }
+
+        }
+
+    }
+
+
+    function stepMazeBosses(){
+
+        if (mazeBosses.length === 0) return;
+
+        
+
+        if (gameState.playerMoveCount % gameState.mazeBossTeleportThreshold === 0 && gameState.playerMoveCount > 0) {
+
+            const availableCells = [];
+
+            for (let y=1; y<rows-1; y++) {
+
+                for (let x=1; x<cols-1; x++) {
+
+                    if (mazeGrid[y][x] === 0 && !(x===player.x && y===player.y) && !(x===exitCell.x && y===exitCell.y)) {
+
+                        availableCells.push({x, y});
+
+                    }
+
+                }
+
+            }
+
+            for (const dr of mazeBosses) {
+
+                if (availableCells.length > 0) {
+
+                    const index = rndInt(0, availableCells.length - 1);
+
+                    const newPos = availableCells.splice(index, 1)[0];
+
+                    dr.x = newPos.x;
+
+                    dr.y = newPos.y;
+
+                    dr.cooldown = 20;
+
+                }
+
+            }
+
+        }
+
+        for (const dr of mazeBosses){
+
+            if (dr.x===player.x && dr.y===player.y) {
+
+                playerDies();
+
+                return;
+
+            }
+
+            dr.cooldown--;
+
+            if (dr.cooldown <= 0){
+
+                dr.cooldown = 30 + Math.floor(Math.random()*60);
+
+                const vx = Math.sign(player.x - dr.x);
+
+                const vy = Math.sign(player.y - dr.y);
+
+                if (vx!==0 || vy!==0) {
+
+                    fireballs.push({x: dr.x, y: dr.y, vx, vy, fromDragon: true});
+
+                    SFX.mazeBossFire();
+
+                }
+
+            }
+
+        }
+
+    }
+
+
+    function stepProjectiles(){
+
+        for (let i=bullets.length-1;i>=0;i--){
+
+            const b = bullets[i];
+
+            b.x += b.vx; b.y += b.vy;
+
+            if (!inBounds(b.x,b.y) || mazeGrid[b.y][b.x]===1) { bullets.splice(i,1); continue; }
+
+            let hitIndex = enemies.findIndex(e=>e.alive && e.x===b.x && e.y===b.y);
+
+            if (hitIndex!==-1){ enemies[hitIndex].alive=false; bullets.splice(i,1); gameState.enemiesDefeated++; SFX.enemyHit(); continue; }
+
+            let dIndex = mazeBosses.findIndex(d=>d.x===b.x && d.y===b.y);
+
+            if (dIndex!==-1){
+
+                mazeBosses[dIndex].hp--;
+
+                bullets.splice(i,1);
+
+                SFX.enemyHit();
+
+                if (mazeBosses[dIndex].hp <=0){ mazeBosses.splice(dIndex,1); gameState.mazeBossesDefeated=(gameState.mazeBossesDefeated||0)+1; }
+
+                continue;
+
+            }
+
+        }
+
+
+        for (let i=fireballs.length-1;i>=0;i--){
+
+            const fb = fireballs[i];
+
+            fb.x += fb.vx; fb.y += fb.vy;
+
+            if (!inBounds(fb.x,fb.y)) { fireballs.splice(i,1); continue; }
+
+            if (fb.x===player.x && fb.y===player.y){
+
+                fireballs.splice(i,1);
+
+                handlePlayerHit(true);
+
+                return;
+
+            }
+
+        }
+
+    }
+
+
+    function handlePlayerHit(isEnemyOrProjectileHit=true){
+
+        SFX.playerHit();
+
+        if (player.shield){
+
+            player.shield=false;
+
+            if (isEnemyOrProjectileHit) gameState.shouldPushBack = true;
+
+            return;
+
+        } else {
+
+            playerDies();
+
+        }
+
+    }
+
+
+    function playerDies(){
+
+        if(!gameState.playing) return;
+
+        gameState.playing = false;
+
+        SFX.gameOver();
+
+        gameState.menuState = 'none';
+
+
+        ctx.fillStyle='rgba(0,0,0,0.85)';
+
+        ctx.fillRect(0,0,canvas.width,canvas.height);
+
+        ctx.fillStyle='#e31b1b';
+
+        ctx.textAlign='center';
+
+        ctx.font='bold 50px monospace';
+
+        ctx.fillText('YOU DIED', canvas.width/2, canvas.height/2 - 50);
+
+        ctx.fillStyle='#fff';
+
+        ctx.font='20px monospace';
+
+        ctx.fillText(`Levels Survived: ${gameState.levelIndex}`, canvas.width/2, canvas.height/2);
+
+        ctx.fillText(`Enemies Defeated: ${gameState.enemiesDefeated}`, canvas.width/2, canvas.height/2 + 30);
+
+        ctx.fillStyle='#aaa';
+
+        ctx.font='16px monospace';
+
+        ctx.fillText(`Press 'R' to Restart`, canvas.width/2, canvas.height/2 + 80);
+
+    }
+
+
+    function startNewGame() {
+
+        gameState.playing = true;
+
+        gameState.levelIndex = 0;
+
+        gameState.enemiesToSpawn = 1;
+
+        gameState.enemiesDefeated = 0;
+
+        gameState.mazeBossesDefeated = 0;
+
+        gameState.startTime = Date.now();
+
+        gameState.paused = false;
+
+        gameState.menuState = 'none';
+
+        currentSelection = 0; // Reset menu selection
+
+        player.ammo = 3;
+
+        player.shield = false;
+
+        resize();
+
+        generateLevel(0);
+
+        render();
+
+    }
+
+
+    function generateLevel(idx) {
+
+        gameState.levelIndex = idx;
+
+        generateMazeGrid();
+
+        const isBoss = (idx > 0 && (idx+1) % 5 === 0);
+
+        const desiredEnemyCount = Math.min(10, idx + 1);
+
+        placeTrapsAndItems(idx, desiredEnemyCount, isBoss);
+
+        render();
+
+    }
+
+
+    function endLevelAndAdvance() {
+
+        SFX.levelComplete();
+
+        gameState.levelIndex++;
+
+        generateLevel(gameState.levelIndex);
+
+    }
+
+
+    // -------------------- MENU DRAWING --------------------
+
+
+    const MENU_WIDTH = 300;
+
+    const MENU_HEIGHT = 400;
+
+    const BUTTON_HEIGHT = 50;
+
+    const BUTTON_MARGIN = 20;
+
+
+    function drawButton(text, y, active, textColor = '#ffffff') {
+
+        const x = canvas.width / 2 - MENU_WIDTH / 2 + BUTTON_MARGIN;
+
+        const width = MENU_WIDTH - 2 * BUTTON_MARGIN;
+
+        const height = BUTTON_HEIGHT;
+
+        
+
+        ctx.fillStyle = active ? '#3388ff' : '#003366';
+
+        ctx.fillRect(x, y, width, height);
+
+
+        ctx.strokeStyle = active ? '#ffffff' : '#44aaff';
+
+        ctx.lineWidth = 3;
+
+        ctx.strokeRect(x, y, width, height);
+
+
+        ctx.fillStyle = textColor;
+
+        ctx.font = '20px monospace';
+
+        ctx.textAlign = 'center';
+
+        ctx.fillText(text, canvas.width / 2, y + height / 2 + 7);
+
+    }
+
+    
+
+    function drawPauseMenu() {
+
+        ctx.fillStyle = 'rgba(0,0,0,0.85)';
+
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+
+        const xCenter = canvas.width / 2;
+
+        let y = canvas.height / 2 - MENU_HEIGHT / 2;
+
+
+        ctx.fillStyle = '#ffffff';
+
+        ctx.font = 'bold 30px monospace';
+
+        ctx.textAlign = 'center';
+
+        ctx.fillText('GAME PAUSED', xCenter, y + 50);
+
+
+        y += 100;
+
+
+        const buttons = [
+
+            { text: 'CONTINUE', action: () => { 
+
+                SFX.menuClick(); 
+
+                gameState.paused = false; 
+
+                gameState.menuState = 'none'; 
+
+                render(); 
+
+                }, key: 'c' 
+
+            },
+
+            { text: 'SETTINGS', action: () => { 
+
+                SFX.menuClick(); 
+
+                gameState.menuState = 'settings'; 
+
+                currentSelection = 0;
+
+                render(); 
+
+                }, key: 's' 
+
+            },
+
+            { text: 'RESTART', action: () => { 
+
+                SFX.menuClick(); 
+
+                startNewGame(); 
+
+                }, key: 'r' 
+
+            },
+
+        ];
+
+
+        buttons.forEach((btn, index) => {
+
+            drawButton(btn.text, y + index * (BUTTON_HEIGHT + BUTTON_MARGIN), index === currentSelection);
+
+        });
+
+
+        return buttons;
+
+    }
+
+    
+
+    function drawSettingsMenu() {
+
+        ctx.fillStyle = 'rgba(0,0,0,0.85)';
+
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+
+        const xCenter = canvas.width / 2;
+
+        let y = canvas.height / 2 - MENU_HEIGHT / 2;
+
+
+        ctx.fillStyle = '#ffffff';
+
+        ctx.font = 'bold 30px monospace';
+
+        ctx.textAlign = 'center';
+
+        ctx.fillText('SETTINGS', xCenter, y + 50);
+
+
+        y += 100;
+
+
+        const diffColors = {
+
+            easy: '#00ff00',
+
+            normal: 'yellow',
+
+            hard: '#ff0000',
+
+        };
+
+
+        const options = [
+
+            { 
+
+                text: `SOUND FX: ${gameState.sfxOn ? 'ON' : 'OFF'}`, 
+
+                action: toggleSFX, 
+
+                key: 'f',
+
+                color: gameState.sfxOn ? '#00ff00' : '#ffffff'
+
+            },
+
+            { 
+
+                text: `DIFFICULTY: ${gameState.difficulty.toUpperCase()}`, 
+
+                action: () => {
+
+                SFX.menuClick();
+
+                if (gameState.difficulty === 'easy') setDifficulty('normal');
+
+                else if (gameState.difficulty === 'normal') setDifficulty('hard');
+
+                else setDifficulty('easy');
+
+                render();
+
+                }, 
+
+                key: 'd',
+
+                color: diffColors[gameState.difficulty]
+
+            },
+
+            { 
+
+                text: 'BACK', 
+
+                action: () => { 
+
+                SFX.menuClick(); 
+
+                gameState.menuState = 'pause'; 
+
+                currentSelection = 1;
+
+                render(); 
+
+                }, 
+
+                key: 'escape' 
+
+            },
+
+        ];
+
+
+        options.forEach((opt, index) => {
+
+            const btnY = y + index * (BUTTON_HEIGHT + BUTTON_MARGIN);
+
+            drawButton(opt.text, btnY, index === currentSelection, opt.color);
+
+        });
+
+
+        return options;
+
+    }
+
+    
+
+    // -------------------- EVENT HANDLING --------------------
+
+
+    function handleMenuKey(e) {
+
+        const isPauseMenu = gameState.menuState === 'pause';
+
+        const isSettingsMenu = gameState.menuState === 'settings';
+
+        
+
+        let buttons = [];
+
+        if (isPauseMenu) buttons = drawPauseMenu();
+
+        if (isSettingsMenu) buttons = drawSettingsMenu();
+
+
+        if (e.key === 'ArrowUp') {
+
+            currentSelection = (currentSelection - 1 + buttons.length) % buttons.length;
+
+            SFX.menuClick();
+
+        } else if (e.key === 'ArrowDown') {
+
+            currentSelection = (currentSelection + 1) % buttons.length;
+
+            SFX.menuClick();
+
+        } else if (e.key === 'Enter' || e.key === ' ') {
+
+            e.preventDefault();
+
+            buttons[currentSelection].action();
+
+            return;
+
+        } else if (e.key.toLowerCase() === 'p' && isPauseMenu) {
+
+            buttons[0].action(); 
+
+            return;
+
+        } else {
+
+            const keyMatch = buttons.find(b => b.key && e.key.toLowerCase() === b.key);
+
+            if (keyMatch) {
+
+                keyMatch.action();
+
+                currentSelection = 0; 
+
+                return;
+
+            }
+
+        }
+
+
+        render();
+
+    }
+
+
+    window.addEventListener('keydown',(e)=>{
+
+        if (!gameState.playing) {
+
+            if (e.key.toLowerCase()==='r') {
+
+                if (audioContext.state === 'suspended') audioContext.resume();
+
+                startNewGame();
+
+            }
+
+            return;
+
+        }
+
+        
+
+        if (gameState.paused && gameState.menuState !== 'none') {
+
+            handleMenuKey(e);
+
+            return;
+
+        }
+
+
+        if (e.key.toLowerCase()==='p'){
+
+            gameState.paused=!gameState.paused;
+
+            if(gameState.paused) {
+
+                gameState.menuState = 'pause';
+
+                currentSelection = 0;
+
+            } else {
+
+                gameState.menuState = 'none';
+
+            }
+
+            render(); 
+
+            return;
+
+        }
+
+        
+
+        if (e.key===' '){
+
+            if (player.ammo>0){
+
+                const dir = player.lastMoveDir || {dx:1,dy:0};
+
+                bullets.push({x:player.x,y:player.y,vx:dir.dx,vy:dir.dy,fromDragon:false});
+
+                player.ammo--;
+
+                SFX.shoot();
+
+                stepProjectiles();
+
+                if(gameState.playing) render();
+
+            }
+
+            e.preventDefault(); return;
+
+        }
+
+        
+
+        if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)){
+
+            const dirMap = {'ArrowUp':[0,-1],'ArrowDown':[0,1],'ArrowLeft':[-1,0],'ArrowRight':[1,0]};
+
+            const [dx,dy] = dirMap[e.key];
+
+            attemptPlayerMove(dx,dy);
+
+        }
+
+    });
+
+
+    canvas.addEventListener('click', (e) => {
+
+        if (!gameState.playing || !gameState.paused || gameState.menuState === 'none') return;
+
+        
+
+        const rect = canvas.getBoundingClientRect();
+
+        const clickX = e.clientX - rect.left;
+
+        const clickY = e.clientY - rect.top;
+
+        
+
+        const x = canvas.width / 2 - MENU_WIDTH / 2 + BUTTON_MARGIN;
+
+        const width = MENU_WIDTH - 2 * BUTTON_MARGIN;
+
+        let startY = canvas.height / 2 - MENU_HEIGHT / 2 + 100;
+
+
+        let buttons = [];
+
+        if (gameState.menuState === 'pause') {
+
+            buttons = [
+
+                { text: 'CONTINUE', action: () => { gameState.paused = false; gameState.menuState = 'none'; render(); } },
+
+                { text: 'SETTINGS', action: () => { gameState.menuState = 'settings'; currentSelection = 0; render(); } },
+
+                { text: 'RESTART', action: () => { startNewGame(); } },
+
+            ];
+
+        } else if (gameState.menuState === 'settings') {
+
+            buttons = [
+
+                { text: 'SOUND FX', action: toggleSFX },
+
+                { text: 'DIFFICULTY', action: () => {
+
+                    if (gameState.difficulty === 'easy') setDifficulty('normal');
+
+                    else if (gameState.difficulty === 'normal') setDifficulty('hard');
+
+                    else setDifficulty('easy');
+
+                    render();
+
+                } },
+
+                { text: 'BACK', action: () => { gameState.menuState = 'pause'; currentSelection = 1; render(); } },
+
+            ];
+
+        }
+
+        
+
+        buttons.forEach((btn, index) => {
+
+            const btnY = startY + index * (BUTTON_HEIGHT + BUTTON_MARGIN);
+
+            if (clickX >= x && clickX <= x + width && clickY >= btnY && clickY <= btnY + BUTTON_HEIGHT) {
+
+                SFX.menuClick();
+
+                btn.action();
+
+                currentSelection = 0;
+
+            }
+
+        });
+
+    });
+
+
+    window.addEventListener('resize', () => {
+
+        if(gameState.playing) {
+
+            resize();
+
+            generateLevel(gameState.levelIndex);
+
+        }
+
+    });
+
+
+    function attemptPlayerMove(dx,dy){
+
+        if (!gameState.playing || gameState.paused) return;
+
+        const nx = player.x + dx, ny = player.y + dy;
+
+        let movedSuccessfully = false;
+
+
+        if (inBounds(nx,ny) && mazeGrid[ny][nx]===0) {
+
+            player.x=nx; player.y=ny;
+
+            player.lastMoveDir={dx,dy};
+
+            movedSuccessfully = true;
+
+            SFX.playerMove();
+
+        }
+
+
+        if (movedSuccessfully) {
+
+            gameState.playerMoveCount++;
+
+            if (gameState.playerMoveCount % 3 === 0) {
+
+                gameState.trapsActive = !gameState.trapsActive;
+
+                SFX.trapToggle(gameState.trapsActive);
+
+            }
+
+            if (gameState.playerMoveCount % gameState.enemiesSpawnThreshold === 0) {
+
+                spawnNewEnemy();
+
+            }
+
+        }
+
+
+        if (gameState.trapsActive && (spikes.find(s=>s.x===player.x && s.y===player.y) || lava.find(s=>s.x===player.x && s.y===player.y))){
+
+            handlePlayerHit(false);
+
+            return;
+
+        }
+
+
+        const orbIndex = purpleOrbs.findIndex(o=>o.x===player.x && o.y===player.y);
+
+        if (orbIndex!==-1){ purpleOrbs.splice(orbIndex,1); player.ammo+=2; SFX.itemPickup(); }
+
+
+        const shIndex = blueShields.findIndex(s=>s.x===player.x && s.y===player.y);
+
+        if (shIndex!==-1){ blueShields.splice(shIndex,1); player.shield=true; SFX.itemPickup(); }
+
+
+        stepProjectiles();
+
+        if(!gameState.playing) return;
+
+
+        if (mazeBosses.length>0) { 
+
+            stepMazeBosses(); 
+
+        }
+
+        stepEnemies();
+
+
+        if(!gameState.playing) return;
+
+
+        if (player.x===exitCell.x && player.y===exitCell.y){
+
+            if (mazeBosses.length === 0) { 
+
+                endLevelAndAdvance();
+
+                return;
+
+            }
+
+        }
+
+
+        render();
+
+    }
+
+
+    function drawSpikeTriangle(x, y, isActive) {
+
+        ctx.fillStyle = isActive ? '#ff0000' : '#88000030';
+
+        const cx = x * CELL + CELL / 2;
+
+        const cy = y * CELL + CELL / 2;
+
+        const size = CELL * 0.4;
+
+        ctx.beginPath();
+
+        ctx.moveTo(cx - size, cy + size * 0.866);
+
+        ctx.lineTo(cx + size, cy + size * 0.866);
+
+        ctx.lineTo(cx, cy - size * 0.866);
+
+        ctx.closePath();
+
+        ctx.fill();
+
+    }
+
+
+    function render(skipClear) {
+
+        if(!skipClear) {
+
+            ctx.fillStyle = '#111';
+
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            ctx.fillStyle = '#444';
+
+            for(let y=0; y<rows; y++) {
+
+                for(let x=0; x<cols; x++) {
+
+                    if(mazeGrid[y][x]===1) ctx.fillRect(x*CELL, y*CELL, CELL, CELL);
+
+                }
+
+            }
+
+
+            if (gameState.trapsActive) {
+
+                spikes.forEach(s => drawSpikeTriangle(s.x, s.y, true));
+
+                ctx.fillStyle = '#ff4400';
+
+                lava.forEach(l => ctx.fillRect(l.x*CELL, l.y*CELL, CELL, CELL));
+
+            } else {
+
+                spikes.forEach(s => drawSpikeTriangle(s.x, s.y, false));
+
+                ctx.fillStyle = '#88220030';
+
+                lava.forEach(l => ctx.fillRect(l.x*CELL, l.y*CELL, CELL, CELL));
+
+            }
+
+
+            ctx.fillStyle = '#00ff00';
+
+            ctx.fillRect(exitCell.x*CELL, exitCell.y*CELL, CELL, CELL);
+
+
+            ctx.fillStyle = 'purple';
+
+            purpleOrbs.forEach(o => { ctx.beginPath(); ctx.arc(o.x*CELL+CELL/2, o.y*CELL+CELL/2, CELL/3, 0, Math.PI*2); ctx.fill(); });
+
+            ctx.fillStyle = 'cyan';
+
+            blueShields.forEach(s => { ctx.beginPath(); ctx.arc(s.x*CELL+CELL/2, s.y*CELL+CELL/2, CELL/3, 0, Math.PI*2); ctx.fill(); });
+
+
+            ctx.fillStyle = 'red';
+
+            enemies.forEach(e => { if(e.alive) ctx.fillRect(e.x*CELL+2, e.y*CELL+2, CELL-4, CELL-4); });
+
+
+            ctx.fillStyle = '#ff00aa';
+
+            mazeBosses.forEach(d => { ctx.fillRect(d.x*CELL, d.y*CELL, CELL, CELL); });
+
+
+            ctx.fillStyle = 'yellow';
+
+            bullets.forEach(b => ctx.fillRect(b.x*CELL+8, b.y*CELL+8, CELL-16, CELL-16));
+
+            ctx.fillStyle = 'orange';
+
+            fireballs.forEach(f => { ctx.beginPath(); ctx.arc(f.x*CELL+CELL/2, f.y*CELL+CELL/2, CELL/3, 0, Math.PI*2); ctx.fill(); });
+
+
+            ctx.fillStyle = player.shield ? 'cyan' : 'white';
+
+            ctx.fillRect(player.x*CELL+4, player.y*CELL+4, CELL-8, CELL-8);
+
+
+            ctx.fillStyle = 'white';
+
+            ctx.font = '16px monospace';
+
+            ctx.textAlign = 'left';
+
+
+            ctx.fillText(`Level: ${gameState.levelIndex+1} | Ammo: ${player.ammo} | Traps: ${gameState.trapsActive ? 'ON' : 'OFF'}`, 10, 20);
+
+            const movesUntilSpawn = gameState.enemiesSpawnThreshold - (gameState.playerMoveCount % gameState.enemiesSpawnThreshold);
+
+            ctx.fillText(`New Enemy in: ${movesUntilSpawn} moves (Difficulty: ${gameState.difficulty.toUpperCase()})`, 10, mazeBosses.length > 0 ? 60 : 40);
+
+
+            if(mazeBosses.length > 0) {
+
+                const movesUntilTeleport = gameState.mazeBossTeleportThreshold - (gameState.playerMoveCount % gameState.mazeBossTeleportThreshold);
+
+                ctx.fillText(`Maze Boss Teleport in: ${movesUntilTeleport} moves`, 10, 40);
+
+            }
+
+        }
+
+
+        if(gameState.paused) {
+
+            if (gameState.menuState === 'pause') {
+
+                drawPauseMenu();
+
+            } else if (gameState.menuState === 'settings') {
+
+                drawSettingsMenu();
+
+            } else {
+
+                ctx.textAlign = 'center';
+
+                ctx.fillStyle = 'yellow';
+
+                ctx.fillText("PAUSED", canvas.width/2, 40);
+
+            }
+
+        }
+
+    }
+
+
+    resize();
+
+    ctx.fillStyle = '#111'; ctx.fillRect(0,0,canvas.width,canvas.height);
+
+    ctx.fillStyle = 'white'; ctx.textAlign='center';
+
+    ctx.font='30px monospace'; ctx.fillText('MAZE SURVIVAL', canvas.width/2, canvas.height/2 - 20);
+
+    ctx.font='16px monospace'; ctx.fillText('Arrows to Move | Space to Shoot | P to Pause', canvas.width/2, canvas.height/2 + 20);
+
+    ctx.fillText('Traps flash on/off every 3 moves!', canvas.width/2, canvas.height/2 + 40);
+
+    ctx.fillText(`New enemy spawns every ${gameState.enemiesSpawnThreshold} moves!`, canvas.width/2, canvas.height/2 + 60);
+
+    ctx.fillText('Press R to Start', canvas.width/2, canvas.height/2 + 90);
+
+
+})();
+
+</script>
+
+</body>
+
+</html>
