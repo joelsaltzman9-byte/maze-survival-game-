@@ -119,7 +119,6 @@
     document.getElementById('game-container').appendChild(canvas);
     const ctx = canvas.getContext('2d');
     
-    // UI Elements
     const mobileControls = document.getElementById('mobile-controls');
 
     let cols, rows;
@@ -166,25 +165,38 @@
     let mazeBosses = [];
     let fireballs = [];
 
-    // -------------------- AUDIO SETUP --------------------
-    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    // -------------------- SAFE-BOOT AUDIO SETUP --------------------
+    let audioContext; 
+
+    // Function to initialize audio context only after a user interaction
+    function initAudio() {
+        if (!audioContext) {
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        }
+    }
     
     function playSound(frequency, duration, volume, type = 'square') {
+        // Safe check: if audio isn't initialized or sound is off, do nothing
         if (!audioContext || !gameState.sfxOn) return;
-        const osc = audioContext.createOscillator();
-        const gain = audioContext.createGain();
-
-        osc.type = type;
-        osc.frequency.setValueAtTime(frequency, audioContext.currentTime);
         
-        gain.gain.setValueAtTime(volume, audioContext.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.00001, audioContext.currentTime + duration);
+        try {
+            const osc = audioContext.createOscillator();
+            const gain = audioContext.createGain();
 
-        osc.connect(gain);
-        gain.connect(audioContext.destination);
+            osc.type = type;
+            osc.frequency.setValueAtTime(frequency, audioContext.currentTime);
+            
+            gain.gain.setValueAtTime(volume, audioContext.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.00001, audioContext.currentTime + duration);
 
-        osc.start();
-        osc.stop(audioContext.currentTime + duration);
+            osc.connect(gain);
+            gain.connect(audioContext.destination);
+
+            osc.start();
+            osc.stop(audioContext.currentTime + duration);
+        } catch (e) {
+            console.warn("Audio playback failed:", e);
+        }
     }
 
     const SFX = {
@@ -589,7 +601,12 @@
     }
 
     function startNewGame() {
-        if (audioContext.state === 'suspended') audioContext.resume();
+        // --- SAFE-BOOT: Init Audio Context on first interaction ---
+        initAudio(); 
+        if (audioContext && audioContext.state === 'suspended') {
+            audioContext.resume();
+        }
+        
         gameState.playing = true;
         toggleMobileUI(true);
         gameState.levelIndex = 0;
@@ -696,10 +713,10 @@
         if(gameState.paused) {
             gameState.menuState = 'pause';
             currentSelection = 0;
-            toggleMobileUI(false); // Hide controls in menu
+            toggleMobileUI(false); 
         } else {
             gameState.menuState = 'none';
-            toggleMobileUI(true); // Show controls when resuming
+            toggleMobileUI(true); 
         }
         render();
     }
@@ -872,8 +889,6 @@
             e.preventDefault();
             callback();
         }, {passive: false});
-        
-        // Prevent default on these to stop zooming/selection
         el.addEventListener('touchend', (e) => e.preventDefault());
     }
 
@@ -915,7 +930,6 @@
     });
 
     canvas.addEventListener('click', (e) => {
-        // Handle "Click to Start" if not playing and not in a specific menu state that blocks starting
         if (!gameState.playing && gameState.menuState === 'none') {
             startNewGame();
             return;
@@ -961,10 +975,9 @@
         });
     });
 
-    // Also support touch start on canvas for "Tap to Start"
     canvas.addEventListener('touchstart', (e) => {
          if (!gameState.playing && gameState.menuState === 'none') {
-             e.preventDefault(); // Stop double-tap zoom
+             e.preventDefault(); 
              startNewGame();
          }
     }, {passive: false});
