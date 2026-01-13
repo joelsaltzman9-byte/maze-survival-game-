@@ -75,9 +75,10 @@
             font-size: 14px;
         }
 
+        /* Repositioned Pause Button to top-left */
         .pause-group {
-            top: 20px;
-            right: 20px;
+            top: 60px; 
+            left: 10px;
         }
 
         .btn-pause {
@@ -384,7 +385,7 @@
             const bossesCount = Math.max(1, Math.floor(levelIndex/5));
             mazeBosses = [];
             const bossCells = [];
-            for (let y=1;y<rows-1;y++) for (let x=1;x<cols-1;x++){
+            for (let y=1; y<rows-1; y++) for (let x=1; x<cols-1; x++){
                 if (!(x===player.x && y===player.y) && !(x===exitCell.x && y===exitCell.y)) bossCells.push([x,y]);
             }
             for (let d=0; d<bossesCount && bossCells.length>0; d++){
@@ -1033,37 +1034,33 @@
             ctx.fillStyle = player.shield ? 'cyan' : 'white';
             ctx.fillRect(player.x*CELL+4, player.y*CELL+4, CELL-8, CELL-8);
 
-            ctx.fillStyle = 'white';
-            ctx.font = '16px monospace';
-            ctx.textAlign = 'left';
-
-            // Clean HUD: Removed traps indicator and difficulty text
-            ctx.fillText(`Level: ${gameState.levelIndex+1} | Ammo: ${player.ammo}`, 10, 20);
-
-            // Replacement: Enemy Spawn Progress Bar
+            // --- Consolidated Top-Left HUD ---
             const barWidth = 150;
             const barHeight = 10;
             const barX = 10;
-            const barY = 35;
+            const barY = 10; // Top Left Corner
             const progress = (gameState.playerMoveCount % gameState.enemiesSpawnThreshold) / gameState.enemiesSpawnThreshold;
             
-            // Background
+            // Draw Spawn Progress Bar (At the very top)
             ctx.fillStyle = '#333';
             ctx.fillRect(barX, barY, barWidth, barHeight);
-            
-            // Progress Fill
             ctx.fillStyle = '#ff0000';
             ctx.fillRect(barX, barY, barWidth * progress, barHeight);
             
-            // Label
             ctx.fillStyle = 'white';
             ctx.font = '12px monospace';
+            ctx.textAlign = 'left';
             ctx.fillText('NEXT ENEMY', barX + barWidth + 10, barY + 10);
 
+            // Draw Level/Ammo Info (Below the Bar)
+            ctx.font = '16px monospace';
+            ctx.fillText(`Level: ${gameState.levelIndex+1} | Ammo: ${player.ammo}`, 10, 35);
+
+            // Boss Teleport Indicator (Shifted lower to accommodate pause button)
             if(mazeBosses.length > 0) {
                 const movesUntilTeleport = gameState.mazeBossTeleportThreshold - (gameState.playerMoveCount % gameState.mazeBossTeleportThreshold);
                 ctx.font = '16px monospace';
-                ctx.fillText(`Maze Boss Teleport in: ${movesUntilTeleport} moves`, 10, 70);
+                ctx.fillText(`Maze Boss Teleport in: ${movesUntilTeleport} moves`, 10, 130);
             }
         }
 
