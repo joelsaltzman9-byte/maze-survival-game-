@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Maze Survival</title>
+<style>
+body { margin: 0; overflow: hidden; background: #111; touch-action: none; }
+
+/* MOBILE CONTROLS STYLING */
+#mobile-controls {
+    display: none; /* Shown via JS if mobile */
+    position: fixed;
+    bottom: 20px;
+    left: 0;
+    width: 100%;
+    height: 180px;
+    z-index: 100000;
+    pointer-events: none;
+    justify-content: space-between;
+    padding: 0 20px;
+    box-sizing: border-box;
+}
+
+.control-group {
+    pointer-events: auto;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+}
+
+/* D-PAD */
+.dpad-row { display: flex; }
+.btn {
+    width: 60px;
+    height: 60px;
+    background: rgba(255,255,255,0.15);
+    border: 2px solid rgba(255,255,255,0.3);
+    border-radius: 10px;
+    margin: 5px;
+    color: white;
+    font-size: 24px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    user-select: none;
+    touch-action: none;
+}
+.btn:active { background: rgba(255,255,255,0.4); }
+
+/* ACTION BUTTONS */
+.action-btn {
+    width: 70px;
+    height: 70px;
+    border-radius: 50%;
+    margin-bottom: 10px;
+    font-size: 14px;
+    font-family: monospace;
+    font-weight: bold;
+}
+#btn-shoot { background: rgba(255,50,50,0.3); border-color: rgba(255,50,50,0.6); }
+#btn-pause { background: rgba(50,150,255,0.3); border-color: rgba(50,150,255,0.6); }
+#btn-shoot:active { background: rgba(255,50,50,0.6); }
+#btn-pause:active { background: rgba(50,150,255,0.6); }
+</style>
+</head>
+<body>
+<div id="game-container"></div>
+
+<div id="mobile-controls">
+    <div class="control-group">
+        <div class="dpad-row"><div class="btn" id="btn-up">▲</div></div>
+        <div class="dpad-row">
+            <div class="btn" id="btn-left">◀</div>
+            <div class="btn" id="btn-down">▼</div>
+            <div class="btn" id="btn-right">▶</div>
+        </div>
+    </div>
+    <div class="control-group">
+        <div class="btn action-btn" id="btn-pause">PAUSE</div>
+        <div class="btn action-btn" id="btn-shoot">SHOOT</div>
+    </div>
+</div>
+
+<script>
+(function(){
+    const CELL = 25;
+    const canvas = document.createElement('canvas');
+    Object.assign(canvas.style,{position:'fixed',left:0,top:0,zIndex:99999,background:'#111'});
+    document.getElementById('game-container').appendChild(canvas);
+    const ctx = canvas.getContext('2d');
+
+    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || 
+                     (window.innerWidth < 800 && 'ontouchstart' in window);
+
+    if(isMobile) document.getElementById('mobile-controls').style.display='flex';
+
+    let cols, rows;
+    function resize() {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        cols = Math.floor(canvas.width / CELL);
+        rows = Math.floor(canvas.height / CELL);
+        if(cols%2===0) cols--; 
+        if(rows%2===0) rows--;
+        cols=Math.max(7,cols); 
+        rows=Math.max(7,rows);
+    }
+
+    const gameState = {
+        playing: false,
+        paused: false,
+        menuState: 'none',
+        levelIndex: 0,
+        enemiesToSpawn: 0,
+        enemiesDefeated: 0,
+        mazeBossesDefeated: 0,
+        startTime: 0,
+        trapsActive: false,
+        playerMoveCount: 0,
+        enemiesSpawnThreshold: 50,
+        mazeBossTeleportThreshold: 10,
+        sfxOn: true,
+        difficulty: 'normal'
+    };
+
+    let mazeGrid=[], player={x:1,y:1,shield:false,ammo:0}, exitCell={x:0,y:0},
+        spikes=[], lava=[], purpleOrbs=[], blueShields=[], enemies=[], bullets=[], mazeBosses=[], fireballs=[];
+
+    function startNewGame() {
+        gameState.playing = true;
+        gameState.levelIndex = 0;
+        gameState.enemiesToSpawn = 1;
+        gameState.enemiesDefeated = 0;
+        gameState.mazeBossesDefeated = 0;
+        gameState.startTime = Date.now();
+        gameState.paused = false;
+        gameState.menuState = 'none';
+        player.ammo = 3;
+        player.shield = false;
+        resize();
+        // generateLevel(0); // Call your level generation logic here
+        render();
+    }
+
+    function renderStartScreen() {
+        ctx.fillStyle='#111'; ctx.fillRect(0,0,canvas.width,canvas.height);
+        ctx.fillStyle='white'; ctx.textAlign='center';
+        ctx.font='30px monospace'; ctx.fillText('MAZE SURVIVAL', canvas.width/2, canvas.height/2 - 20);
+        ctx.font='16px monospace';
+        ctx.fillText('Arrows to Move | Space to Shoot | P to Pause', canvas.width/2, canvas.height/2 + 20);
+        ctx.fillText('Traps flash on/off every 3 moves!', canvas.width/2, canvas.height/2 + 40);
+        ctx.fillText(`New enemy spawns every ${gameState.enemiesSpawnThreshold} moves!`, canvas.width/2, canvas.height/2 + 60);
+        ctx.fillStyle='yellow';
+        ctx.fillText('Click/Tap Screen to Start', canvas.width/2, canvas.height/2 + 90);
+    }
+
+    canvas.addEventListener('click', () => {
+        if(!gameState.playing) {
+            if(audioContext.state==='suspended') audioContext.resume?.();
+            startNewGame();
+        }
+    });
+
+    window.addEventListener('resize',()=>{ if(gameState.playing){ resize(); /* regenerate level */ render(); } });
+
+    resize();
+    renderStartScreen();
+})();
+</script>
+</body>
+</html>
