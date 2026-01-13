@@ -75,9 +75,9 @@
             font-size: 14px;
         }
 
-        /* Repositioned Pause Button to top-left */
+        /* Pause Button moved to top-left corner */
         .pause-group {
-            top: 60px; 
+            top: 10px; 
             left: 10px;
         }
 
@@ -830,6 +830,107 @@
         return options;
     }
     
+    // -------------------- RENDER FUNCTION --------------------
+    function render() {
+        ctx.fillStyle = '#111';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        for (let y = 0; y < rows; y++) {
+            for (let x = 0; x < cols; x++) {
+                if (mazeGrid[y][x] === 1) {
+                    ctx.fillStyle = '#333';
+                    ctx.fillRect(x * CELL, y * CELL, CELL, CELL);
+                }
+            }
+        }
+
+        ctx.fillStyle = '#222';
+        ctx.fillRect(exitCell.x * CELL, exitCell.y * CELL, CELL, CELL);
+        ctx.strokeStyle = '#0f0';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(exitCell.x * CELL + 2, exitCell.y * CELL + 2, CELL - 4, CELL - 4);
+
+        spikes.forEach(s => {
+            ctx.fillStyle = gameState.trapsActive ? '#f00' : '#400';
+            ctx.beginPath();
+            ctx.moveTo(s.x * CELL + 5, s.y * CELL + CELL - 5);
+            ctx.lineTo(s.x * CELL + CELL / 2, s.y * CELL + 5);
+            ctx.lineTo(s.x * CELL + CELL - 5, s.y * CELL + CELL - 5);
+            ctx.fill();
+        });
+
+        lava.forEach(l => {
+            ctx.fillStyle = gameState.trapsActive ? '#ff4500' : '#4a1a00';
+            ctx.fillRect(l.x * CELL + 2, l.y * CELL + 2, CELL - 4, CELL - 4);
+        });
+
+        purpleOrbs.forEach(o => {
+            ctx.fillStyle = '#a0f';
+            ctx.beginPath();
+            ctx.arc(o.x * CELL + CELL / 2, o.y * CELL + CELL / 2, CELL / 4, 0, Math.PI * 2);
+            ctx.fill();
+        });
+
+        blueShields.forEach(s => {
+            ctx.fillStyle = '#0cf';
+            ctx.fillRect(s.x * CELL + 6, s.y * CELL + 6, CELL - 12, CELL - 12);
+        });
+
+        ctx.fillStyle = 'red';
+        enemies.forEach(e => {
+            if (e.alive) ctx.fillRect(e.x * CELL + 4, e.y * CELL + 4, CELL - 8, CELL - 8);
+        });
+
+        mazeBosses.forEach(d => {
+            ctx.fillStyle = '#f0f';
+            ctx.fillRect(d.x * CELL + 2, d.y * CELL + 2, CELL - 4, CELL - 4);
+            ctx.fillStyle = 'white';
+            ctx.font = '10px monospace';
+            ctx.fillText(d.hp, d.x * CELL + CELL / 2, d.y * CELL + CELL / 2 + 4);
+        });
+
+        ctx.fillStyle = 'yellow';
+        bullets.forEach(b => ctx.fillRect(b.x * CELL + 10, b.y * CELL + 10, 5, 5));
+
+        ctx.fillStyle = 'orange';
+        fireballs.forEach(fb => {
+            ctx.beginPath();
+            ctx.arc(fb.x * CELL + CELL / 2, fb.y * CELL + CELL / 2, 6, 0, Math.PI * 2);
+            ctx.fill();
+        });
+
+        ctx.fillStyle = '#0af';
+        ctx.fillRect(player.x * CELL + 2, player.y * CELL + 2, CELL - 4, CELL - 4);
+        if (player.shield) {
+            ctx.strokeStyle = '#0ff';
+            ctx.lineWidth = 3;
+            ctx.strokeRect(player.x * CELL, player.y * CELL, CELL, CELL);
+        }
+
+        if (gameState.playing) {
+            ctx.textAlign = 'left';
+            ctx.fillStyle = 'white';
+            ctx.font = '16px monospace';
+            // Adjusted HUD positions down to avoid overlap with the pause button
+            ctx.fillText(`LVL: ${gameState.levelIndex + 1} | AMMO: ${player.ammo} | ${player.shield ? 'SHIELD ON' : 'NO SHIELD'}`, 10, 80);
+            ctx.fillStyle = 'yellow';
+            ctx.fillText(`(Difficulty: ${gameState.difficulty.toUpperCase()})`, 10, mazeBosses.length > 0 ? 120 : 100);
+
+            if (mazeBosses.length > 0) {
+                const movesUntilTeleport = gameState.mazeBossTeleportThreshold - (gameState.playerMoveCount % gameState.mazeBossTeleportThreshold);
+                ctx.fillText(`Maze Boss Teleport in: ${movesUntilTeleport} moves`, 10, 100);
+            }
+        }
+
+        if (gameState.paused) {
+            if (gameState.menuState === 'pause') {
+                drawPauseMenu();
+            } else if (gameState.menuState === 'settings') {
+                drawSettingsMenu();
+            }
+        }
+    }
+
     // -------------------- EVENT HANDLING --------------------
 
     function handleMenuKey(e) {
@@ -874,7 +975,6 @@
             callback();
         }, {passive: false});
         
-        // Prevent default on these to stop zooming/selection
         el.addEventListener('touchend', (e) => e.preventDefault());
     }
 
@@ -892,190 +992,32 @@
             }
             return;
         }
-        
-        if (gameState.paused && gameState.menuState !== 'none') {
+
+        if (e.key.toLowerCase() === 'p' || e.key === 'Escape') {
+            togglePause();
+            return;
+        }
+
+        if (gameState.paused) {
             handleMenuKey(e);
             return;
         }
 
-        if (e.key.toLowerCase()==='p'){
-            togglePause();
-            return;
-        }
-        
-        if (e.key===' '){
-            triggerShoot();
-            e.preventDefault(); return;
-        }
-        
-        if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)){
-            const dirMap = {'ArrowUp':[0,-1],'ArrowDown':[0,1],'ArrowLeft':[-1,0],'ArrowRight':[1,0]};
-            const [dx,dy] = dirMap[e.key];
-            attemptPlayerMove(dx,dy);
+        switch(e.key){
+            case 'ArrowUp': attemptPlayerMove(0,-1); break;
+            case 'ArrowDown': attemptPlayerMove(0,1); break;
+            case 'ArrowLeft': attemptPlayerMove(-1,0); break;
+            case 'ArrowRight': attemptPlayerMove(1,0); break;
+            case ' ': e.preventDefault(); triggerShoot(); break;
         }
     });
 
-    canvas.addEventListener('click', (e) => {
-        // Handle "Click to Start" if not playing and not in a specific menu state that blocks starting
-        if (!gameState.playing && gameState.menuState === 'none') {
+    window.addEventListener('resize', () => { resize(); render(); });
+    window.addEventListener('mousedown', (e) => {
+        if (!gameState.playing) {
             startNewGame();
-            return;
-        }
-
-        if (!gameState.playing || !gameState.paused || gameState.menuState === 'none') return;
-        
-        const rect = canvas.getBoundingClientRect();
-        const clickX = e.clientX - rect.left;
-        const clickY = e.clientY - rect.top;
-        
-        const x = canvas.width / 2 - MENU_WIDTH / 2 + BUTTON_MARGIN;
-        const width = MENU_WIDTH - 2 * BUTTON_MARGIN;
-        let startY = canvas.height / 2 - MENU_HEIGHT / 2 + 100;
-
-        let buttons = [];
-        if (gameState.menuState === 'pause') {
-            buttons = [
-                { text: 'CONTINUE', action: () => { togglePause(); } },
-                { text: 'SETTINGS', action: () => { gameState.menuState = 'settings'; currentSelection = 0; render(); } },
-                { text: 'RESTART', action: () => { startNewGame(); } },
-            ];
-        } else if (gameState.menuState === 'settings') {
-            buttons = [
-                { text: 'SOUND FX', action: toggleSFX },
-                { text: 'DIFFICULTY', action: () => {
-                    if (gameState.difficulty === 'easy') setDifficulty('normal');
-                    else if (gameState.difficulty === 'normal') setDifficulty('hard');
-                    else setDifficulty('easy');
-                    render();
-                } },
-                { text: 'BACK', action: () => { gameState.menuState = 'pause'; currentSelection = 1; render(); } },
-            ];
-        }
-        
-        buttons.forEach((btn, index) => {
-            const btnY = startY + index * (BUTTON_HEIGHT + BUTTON_MARGIN);
-            if (clickX >= x && clickX <= x + width && clickY >= btnY && clickY <= btnY + BUTTON_HEIGHT) {
-                SFX.menuClick();
-                btn.action();
-                currentSelection = 0;
-            }
-        });
-    });
-
-    // Also support touch start on canvas for "Tap to Start"
-    canvas.addEventListener('touchstart', (e) => {
-         if (!gameState.playing && gameState.menuState === 'none') {
-             e.preventDefault(); // Stop double-tap zoom
-             startNewGame();
-         }
-    }, {passive: false});
-
-
-    window.addEventListener('resize', () => {
-        if(gameState.playing) {
-            resize();
-            generateLevel(gameState.levelIndex);
         }
     });
-
-    function drawSpikeTriangle(x, y, isActive) {
-        ctx.fillStyle = isActive ? '#ff0000' : '#88000030';
-        const cx = x * CELL + CELL / 2;
-        const cy = y * CELL + CELL / 2;
-        const size = CELL * 0.4;
-        ctx.beginPath();
-        ctx.moveTo(cx - size, cy + size * 0.866);
-        ctx.lineTo(cx + size, cy + size * 0.866);
-        ctx.lineTo(cx, cy - size * 0.866);
-        ctx.closePath();
-        ctx.fill();
-    }
-
-    function render(skipClear) {
-        if(!skipClear) {
-            ctx.fillStyle = '#111';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-            ctx.fillStyle = '#444';
-            for(let y=0; y<rows; y++) {
-                for(let x=0; x<cols; x++) {
-                    if(mazeGrid[y][x]===1) ctx.fillRect(x*CELL, y*CELL, CELL, CELL);
-                }
-            }
-
-            if (gameState.trapsActive) {
-                spikes.forEach(s => drawSpikeTriangle(s.x, s.y, true));
-                ctx.fillStyle = '#ff4400';
-                lava.forEach(l => ctx.fillRect(l.x*CELL, l.y*CELL, CELL, CELL));
-            } else {
-                spikes.forEach(s => drawSpikeTriangle(s.x, s.y, false));
-                ctx.fillStyle = '#88220030';
-                lava.forEach(l => ctx.fillRect(l.x*CELL, l.y*CELL, CELL, CELL));
-            }
-
-            ctx.fillStyle = '#00ff00';
-            ctx.fillRect(exitCell.x*CELL, exitCell.y*CELL, CELL, CELL);
-
-            ctx.fillStyle = 'purple';
-            purpleOrbs.forEach(o => { ctx.beginPath(); ctx.arc(o.x*CELL+CELL/2, o.y*CELL+CELL/2, CELL/3, 0, Math.PI*2); ctx.fill(); });
-            ctx.fillStyle = 'cyan';
-            blueShields.forEach(s => { ctx.beginPath(); ctx.arc(s.x*CELL+CELL/2, s.y*CELL+CELL/2, CELL/3, 0, Math.PI*2); ctx.fill(); });
-
-            ctx.fillStyle = 'red';
-            enemies.forEach(e => { if(e.alive) ctx.fillRect(e.x*CELL+2, e.y*CELL+2, CELL-4, CELL-4); });
-
-            ctx.fillStyle = '#ff00aa';
-            mazeBosses.forEach(d => { ctx.fillRect(d.x*CELL, d.y*CELL, CELL, CELL); });
-
-            ctx.fillStyle = 'yellow';
-            bullets.forEach(b => ctx.fillRect(b.x*CELL+8, b.y*CELL+8, CELL-16, CELL-16));
-            ctx.fillStyle = 'orange';
-            fireballs.forEach(f => { ctx.beginPath(); ctx.arc(f.x*CELL+CELL/2, f.y*CELL+CELL/2, CELL/3, 0, Math.PI*2); ctx.fill(); });
-
-            ctx.fillStyle = player.shield ? 'cyan' : 'white';
-            ctx.fillRect(player.x*CELL+4, player.y*CELL+4, CELL-8, CELL-8);
-
-            // --- Consolidated Top-Left HUD ---
-            const barWidth = 150;
-            const barHeight = 10;
-            const barX = 10;
-            const barY = 10; // Top Left Corner
-            const progress = (gameState.playerMoveCount % gameState.enemiesSpawnThreshold) / gameState.enemiesSpawnThreshold;
-            
-            // Draw Spawn Progress Bar (At the very top)
-            ctx.fillStyle = '#333';
-            ctx.fillRect(barX, barY, barWidth, barHeight);
-            ctx.fillStyle = '#ff0000';
-            ctx.fillRect(barX, barY, barWidth * progress, barHeight);
-            
-            ctx.fillStyle = 'white';
-            ctx.font = '12px monospace';
-            ctx.textAlign = 'left';
-            ctx.fillText('NEXT ENEMY', barX + barWidth + 10, barY + 10);
-
-            // Draw Level/Ammo Info (Below the Bar)
-            ctx.font = '16px monospace';
-            ctx.fillText(`Level: ${gameState.levelIndex+1} | Ammo: ${player.ammo}`, 10, 35);
-
-            // Boss Teleport Indicator (Shifted lower to accommodate pause button)
-            if(mazeBosses.length > 0) {
-                const movesUntilTeleport = gameState.mazeBossTeleportThreshold - (gameState.playerMoveCount % gameState.mazeBossTeleportThreshold);
-                ctx.font = '16px monospace';
-                ctx.fillText(`Maze Boss Teleport in: ${movesUntilTeleport} moves`, 10, 130);
-            }
-        }
-
-        if(gameState.paused) {
-            if (gameState.menuState === 'pause') {
-                drawPauseMenu();
-            } else if (gameState.menuState === 'settings') {
-                drawSettingsMenu();
-            } else {
-                ctx.textAlign = 'center';
-                ctx.fillStyle = 'yellow';
-                ctx.fillText("PAUSED", canvas.width/2, 40);
-            }
-        }
-    }
 
     resize();
     ctx.fillStyle = '#111'; ctx.fillRect(0,0,canvas.width,canvas.height);
@@ -1084,7 +1026,8 @@
     ctx.font='16px monospace'; ctx.fillText('Arrows/D-Pad to Move | Space/Btn to Shoot', canvas.width/2, canvas.height/2 + 20);
     ctx.fillText('Traps flash on/off every 3 moves!', canvas.width/2, canvas.height/2 + 40);
     ctx.fillText(`New enemy spawns every ${gameState.enemiesSpawnThreshold} moves!`, canvas.width/2, canvas.height/2 + 60);
-    ctx.fillText('Click or Tap to Start', canvas.width/2, canvas.height/2 + 90);
+    ctx.fillStyle = '#aaa';
+    ctx.fillText('Tap or Press Any Key to Start', canvas.width/2, canvas.height/2 + 100);
 
 })();
 </script>
